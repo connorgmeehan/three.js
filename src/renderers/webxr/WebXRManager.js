@@ -365,16 +365,13 @@ class WebXRManager extends EventDispatcher {
 
 				// const session = this.getSession();
 				if ( ! session ) return console.warn( 'No XR Session.' );
-
-				// const xrFrame = this.getFrame();
 				if ( ! xrFrame ) return console.warn( 'No XR Frame.' );
-
-				// const referenceSpace = this.getReferenceSpace();
 				if ( ! referenceSpace ) return console.warn( 'No XR Reference Space.' );
-
 				if ( ! glBinding ) return console.warn( 'No XR GL Binding.' );
 
 				const viewerPose = xrFrame.getViewerPose( referenceSpace );
+				if ( ! viewerPose ) return console.warn( 'No XR Viewer Pose' );
+
 				const view = viewerPose.views.find( v => !! v.camera );
 
 				if ( ! view ) return console.warn( 'No XR View with camera.' );
