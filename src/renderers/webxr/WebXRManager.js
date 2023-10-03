@@ -8,6 +8,7 @@ import { WebGLAnimation } from '../webgl/WebGLAnimation.js';
 import { WebGLRenderTarget } from '../WebGLRenderTarget.js';
 import { WebXRController } from './WebXRController.js';
 import { DepthTexture } from '../../textures/DepthTexture.js';
+import { ExternalOpaqueTexture } from '../../textures/ExternalOpaqueTexture.js';
 import {
 	DepthFormat,
 	DepthStencilFormat,
@@ -282,6 +283,7 @@ class WebXRManager extends EventDispatcher {
 					};
 
 					glBaseLayer = new XRWebGLLayer( session, gl, layerInit );
+					glBinding = new XRWebGLBinding( session, gl );
 
 					session.updateRenderState( { baseLayer: glBaseLayer } );
 
@@ -354,6 +356,33 @@ class WebXRManager extends EventDispatcher {
 				scope.dispatchEvent( { type: 'sessionstart' } );
 
 			}
+
+		};
+
+		this.getCameraTexture = () => {
+
+			const glTextureGetter = () => {
+
+				// const session = this.getSession();
+				if ( ! session ) return console.warn( 'No XR Session.' );
+				if ( ! xrFrame ) return console.warn( 'No XR Frame.' );
+				if ( ! referenceSpace ) return console.warn( 'No XR Reference Space.' );
+				if ( ! glBinding ) return console.warn( 'No XR GL Binding.' );
+
+				const viewerPose = xrFrame.getViewerPose( referenceSpace );
+				if ( ! viewerPose ) return console.warn( 'No XR Viewer Pose' );
+
+				const view = viewerPose.views.find( v => !! v.camera );
+
+				if ( ! view ) return console.warn( 'No XR View with camera.' );
+
+				const glOpaqueTexture = glBinding.getCameraImage( view.camera );
+
+				return { data: glOpaqueTexture, width: view.camera.width, height: view.camera.height };
+
+			};
+
+			return new ExternalOpaqueTexture( glTextureGetter );
 
 		};
 

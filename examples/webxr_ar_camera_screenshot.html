@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js ar - camera screenshot</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+		<link type="text/css" rel="stylesheet" href="main.css">
+	</head>
+	<body>
+
+		<div id="info">
+			<a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> ar - camera screenshot<br/>(Chrome Android 107+)
+		</div>
+
+        <div id="dom-overlay" style="position: absolute; right: 10px; bottom: 50px">
+            <img id="screenshot-image" class="hidden" />
+            <button id="screenshot-button">Screenshot</button>
+        </div>
+
+		<!-- Import maps polyfill -->
+		<!-- Remove this when import maps will be widely supported -->
+		<script async src="https://unpkg.com/es-module-shims@1.6.3/dist/es-module-shims.js"></script>
+
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "../build/three.module.js",
+					"three/addons/": "./jsm/"
+				}
+			}
+		</script>
+
+		<script type="module">
+
+			import * as THREE from 'three';
+			import { ARButton } from 'three/addons/webxr/ARButton.js';
+
+			import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+			import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+
+			let camera, scene, renderer;
+			let controller;
+
+			init();
+			animate();
+
+			function init() {
+
+				const container = document.createElement( 'div' );
+				document.body.appendChild( container );
+
+				scene = new THREE.Scene();
+
+				camera = new THREE.PerspectiveCamera( 70, window.innerWidth / window.innerHeight, 0.01, 20 );
+
+				const light = new THREE.HemisphereLight( 0xffffff, 0xbbbbff, 1 );
+				light.position.set( 0.5, 1, 0.25 );
+				scene.add( light );
+
+                const otherlight = new THREE.AmbientLight(0xffffff, 1);
+                scene.add(otherlight);
+
+                // Add complex materials to test GL bindings
+                const dracoLoader = new DRACOLoader();
+                dracoLoader.setDecoderPath( 'jsm/libs/draco/gltf/' );
+                const loader = new GLTFLoader();
+                loader.setDRACOLoader( dracoLoader );
+				//
+
+				renderer = new THREE.WebGLRenderer( { antialias: true, alpha: true } );
+				renderer.setPixelRatio( window.devicePixelRatio );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				renderer.xr.enabled = true;
+				container.appendChild( renderer.domElement );
+
+				//
+
+                document.body.appendChild( ARButton.createButton( renderer, {
+                    requiredFeatures: [ 'camera-access', 'dom-overlay' ],
+                    domOverlay: { root: document.getElementById( 'dom-overlay' ) },
+                } ) );
+
+                const cameraTex = renderer.xr.getCameraTexture();
+
+                console.log({ cameraTex });
+
+				const geometry = new THREE.BoxGeometry( 0.2, 0.2, 0.2 ).rotateX( Math.PI / 2 );
+
+				function onSelect() {
+
+                    const doBox = Math.random() > 0.5;
+
+                    if (doBox) {
+
+                        const material = new THREE.MeshPhongMaterial( { map: cameraTex } );
+                        const mesh = new THREE.Mesh( geometry, material );
+                        mesh.position.set( 0, 0, - 0.3 ).applyMatrix4( controller.matrixWorld );
+                        mesh.quaternion.setFromRotationMatrix( controller.matrixWorld );
+                        scene.add( mesh );
+
+
+
+                    } else {
+
+                        loader.load( 'models/gltf/LittlestTokyo.glb', function ( gltf ) {
+
+                            scene.add(gltf.scene);
+                            gltf.scene.scale.multiplyScalar(0.001);
+                            gltf.scene.position.set( 0, 0, - 0.3 ).applyMatrix4( controller.matrixWorld );
+                            gltf.scene.quaternion.setFromRotationMatrix( controller.matrixWorld );
+
+                        })
+
+                    }
+
+				}
+
+				controller = renderer.xr.getController( 0 );
+				controller.addEventListener( 'select', onSelect );
+				scene.add( controller );
+
+				//
+
+				window.addEventListener( 'resize', onWindowResize );
+
+			}
+
+			function onWindowResize() {
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+			}
+
+			//
+
+			function animate() {
+
+				renderer.setAnimationLoop( render );
+
+			}
+
+			function render() {
+
+				renderer.render( scene, camera );
+
+			}
+
+		</script>
+	</body>
+</html>
+

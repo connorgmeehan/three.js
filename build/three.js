@@ -23092,6 +23092,8 @@ console.warn( 'Scripts "build/three.js" and "build/three.min.js" are deprecated 
 		const supportsInvalidateFramebuffer = typeof navigator === 'undefined' ? false : /OculusBrowser/g.test( navigator.userAgent );
 
 		const _videoTextures = new WeakMap();
+		const _externalOpaqueTextures = new WeakMap();
+
 		let _canvas;
 
 		const _sources = new WeakMap(); // maps WebglTexture objects to instances of Source
@@ -23375,8 +23377,12 @@ console.warn( 'Scripts "build/three.js" and "build/three.min.js" are deprecated 
 
 		function deleteTexture( texture ) {
 
-			const textureProperties = properties.get( texture );
-			_gl.deleteTexture( textureProperties.__webglTexture );
+			if ( ! texture.isExternalTexture ) {
+
+				const textureProperties = properties.get( texture );
+				_gl.deleteTexture( textureProperties.__webglTexture );
+
+			}
 
 			const source = texture.source;
 			const webglTextures = _sources.get( source );
@@ -23517,6 +23523,7 @@ console.warn( 'Scripts "build/three.js" and "build/three.min.js" are deprecated 
 			const textureProperties = properties.get( texture );
 
 			if ( texture.isVideoTexture ) updateVideoTexture( texture );
+			if ( texture.isExternalOpaqueTexture ) updateExternalOpaqueTexture( texture );
 
 			if ( texture.isRenderTargetTexture === false && texture.version > 0 && textureProperties.__version !== texture.version ) {
 
@@ -23702,10 +23709,13 @@ console.warn( 'Scripts "build/three.js" and "build/three.min.js" are deprecated 
 
 				if ( webglTextures[ textureCacheKey ] === undefined ) {
 
-					// create new entry
+					// ExternalTexture provide their own texture
 
+					const glTexture = texture.isExternalTexture ? texture.image.data : _gl.createTexture();
+
+					// create new entry
 					webglTextures[ textureCacheKey ] = {
-						texture: _gl.createTexture(),
+						texture: glTexture,
 						usedTimes: 0
 					};
 
@@ -23714,7 +23724,7 @@ console.warn( 'Scripts "build/three.js" and "build/three.min.js" are deprecated 
 					// when a new instance of WebGLTexture was created, a texture upload is required
 					// even if the image contents are identical
 
-					forceUpload = true;
+					forceUpload = ! texture.isExternalTexture;
 
 				}
 
@@ -23786,11 +23796,15 @@ console.warn( 'Scripts "build/three.js" and "build/three.min.js" are deprecated 
 				let mipmap;
 				const mipmaps = texture.mipmaps;
 
-				const useTexStorage = ( isWebGL2 && texture.isVideoTexture !== true );
+				const useTexStorage = ( isWebGL2 && texture.isVideoTexture !== true && texture.isExternalTexture !== true );
 				const allocateMemory = ( sourceProperties.__version === undefined ) || ( forceUpload === true );
 				const levels = getMipLevels( texture, image, supportsMips );
 
-				if ( texture.isDepthTexture ) {
+				if ( texture.isExternalTexture ) {
+
+					textureProperties.__webglTexture = texture.image.data;
+
+				} else if ( texture.isDepthTexture ) {
 
 					// populate depth texture with dummy data
 
@@ -24996,6 +25010,21 @@ console.warn( 'Scripts "build/three.js" and "build/three.min.js" are deprecated 
 
 		}
 
+		function updateExternalOpaqueTexture( texture ) {
+
+			const frame = info.render.frame;
+
+			// Check the last frame we updated the VideoTexture
+
+			if ( _externalOpaqueTextures.get( texture ) !== frame ) {
+
+				_externalOpaqueTextures.set( texture, frame );
+				texture.update();
+
+			}
+
+		}
+
 		function verifyColorSpace( texture, image ) {
 
 			const encoding = texture.encoding;
@@ -25743,6 +25772,64 @@ console.warn( 'Scripts "build/three.js" and "build/three.min.js" are deprecated 
 
 	}
 
+	class ExternalTexture extends Texture {
+
+		constructor( glTexture, width = 1, height = 1, format, type, mapping, wrapS, wrapT, magFilter = NearestFilter, minFilter = NearestFilter, anisotropy, encoding ) {
+
+			super( null, mapping, wrapS, wrapT, magFilter, minFilter, format, type, anisotropy, encoding );
+
+			this.isExternalTexture = true;
+
+			this.image = { data: glTexture, width, height };
+
+			this.generateMipmaps = false;
+			this.flipY = false;
+			this.unpackAlignment = 1;
+
+		}
+
+		// TODO: Override toJSON and throw an error?
+		// The closest we could get to serialisation would be dumping
+		// the current texture content to pixels and saving it as a static image.
+
+	}
+
+	class ExternalOpaqueTexture extends ExternalTexture {
+
+		constructor( glTextureGetter, width = 1, height = 1, format, type, mapping, wrapS, wrapT, magFilter = NearestFilter, minFilter = NearestFilter, anisotropy, encoding ) {
+
+			super( null, mapping, wrapS, wrapT, magFilter, minFilter, format, type, anisotropy, encoding );
+
+			this.isExternalOpaqueTexture = true;
+
+			this.image = { data: null, width, height };
+			this._glTextureGetter = glTextureGetter;
+
+			this.generateMipmaps = false;
+			this.flipY = false;
+			this.unpackAlignment = 1;
+
+		}
+
+		update() {
+
+			const newData = this._glTextureGetter();
+			if ( newData ) {
+
+				Object.assign( this.image, newData );
+
+			}
+
+			this.needsUpdate = true;
+
+		}
+
+		// TODO: Override toJSON and throw an error?
+		// The closest we could get to serialisation would be dumping
+		// the current texture content to pixels and saving it as a static image.
+
+	}
+
 	class WebXRManager extends EventDispatcher {
 
 		constructor( renderer, gl ) {
@@ -26008,6 +26095,7 @@ console.warn( 'Scripts "build/three.js" and "build/three.min.js" are deprecated 
 						};
 
 						glBaseLayer = new XRWebGLLayer( session, gl, layerInit );
+						glBinding = new XRWebGLBinding( session, gl );
 
 						session.updateRenderState( { baseLayer: glBaseLayer } );
 
@@ -26080,6 +26168,36 @@ console.warn( 'Scripts "build/three.js" and "build/three.min.js" are deprecated 
 					scope.dispatchEvent( { type: 'sessionstart' } );
 
 				}
+
+			};
+
+			this.getCameraTexture = () => {
+
+				const glTextureGetter = () => {
+
+					// const session = this.getSession();
+					if ( ! session ) return console.warn( 'No XR Session.' );
+
+					// const xrFrame = this.getFrame();
+					if ( ! xrFrame ) return console.warn( 'No XR Frame.' );
+
+					// const referenceSpace = this.getReferenceSpace();
+					if ( ! referenceSpace ) return console.warn( 'No XR Reference Space.' );
+
+					if ( ! glBinding ) return console.warn( 'No XR GL Binding.' );
+
+					const viewerPose = xrFrame.getViewerPose( referenceSpace );
+					const view = viewerPose.views.find( v => !! v.camera );
+
+					if ( ! view ) return console.warn( 'No XR View with camera.' );
+
+					const glOpaqueTexture = glBinding.getCameraImage( view.camera );
+
+					return { data: glOpaqueTexture, width: view.camera.width, height: view.camera.height };
+
+				};
+
+				return new ExternalOpaqueTexture( glTextureGetter );
 
 			};
 
@@ -51248,3 +51366,4 @@ console.warn( 'Scripts "build/three.js" and "build/three.min.js" are deprecated 
 	exports.sRGBEncoding = sRGBEncoding;
 
 }));
+//# sourceMappingURL=data:application/json;charset=utf-8;base64,eyJ2ZXJzaW9uIjozLCJmaWxlIjoidGhyZWUuanMiLCJzb3VyY2VzIjpbXSwic291cmNlc0NvbnRlbnQiOltdLCJuYW1lcyI6W10sIm1hcHBpbmdzIjoiIn0=
