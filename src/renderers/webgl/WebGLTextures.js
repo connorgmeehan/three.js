@@ -445,7 +445,12 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 		const textureProperties = properties.get( texture );
 
 		if ( texture.isVideoTexture ) updateVideoTexture( texture );
-		if ( texture.isExternalOpaqueTexture ) updateExternalOpaqueTexture( texture );
+		if ( texture.isExternalOpaqueTexture ) {
+
+			updateExternalOpaqueTexture( texture );
+			textureProperties.__webglTexture = texture.image.data;
+
+		}
 
 		if ( texture.isRenderTargetTexture === false && texture.version > 0 && textureProperties.__version !== texture.version ) {
 
