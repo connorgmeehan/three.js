@@ -23085,6 +23085,8 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 	const supportsInvalidateFramebuffer = typeof navigator === 'undefined' ? false : /OculusBrowser/g.test( navigator.userAgent );
 
 	const _videoTextures = new WeakMap();
+	const _externalOpaqueTextures = new WeakMap();
+
 	let _canvas;
 
 	const _sources = new WeakMap(); // maps WebglTexture objects to instances of Source
@@ -23368,8 +23370,12 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 
 	function deleteTexture( texture ) {
 
-		const textureProperties = properties.get( texture );
-		_gl.deleteTexture( textureProperties.__webglTexture );
+		if ( ! texture.isExternalTexture ) {
+
+			const textureProperties = properties.get( texture );
+			_gl.deleteTexture( textureProperties.__webglTexture );
+
+		}
 
 		const source = texture.source;
 		const webglTextures = _sources.get( source );
@@ -23510,6 +23516,7 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 		const textureProperties = properties.get( texture );
 
 		if ( texture.isVideoTexture ) updateVideoTexture( texture );
+		if ( texture.isExternalOpaqueTexture ) updateExternalOpaqueTexture( texture );
 
 		if ( texture.isRenderTargetTexture === false && texture.version > 0 && textureProperties.__version !== texture.version ) {
 
@@ -23695,10 +23702,13 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 
 			if ( webglTextures[ textureCacheKey ] === undefined ) {
 
-				// create new entry
+				// ExternalTexture provide their own texture
 
+				const glTexture = texture.isExternalTexture ? texture.image.data : _gl.createTexture();
+
+				// create new entry
 				webglTextures[ textureCacheKey ] = {
-					texture: _gl.createTexture(),
+					texture: glTexture,
 					usedTimes: 0
 				};
 
@@ -23707,7 +23717,7 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 				// when a new instance of WebGLTexture was created, a texture upload is required
 				// even if the image contents are identical
 
-				forceUpload = true;
+				forceUpload = ! texture.isExternalTexture;
 
 			}
 
@@ -23779,11 +23789,15 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 			let mipmap;
 			const mipmaps = texture.mipmaps;
 
-			const useTexStorage = ( isWebGL2 && texture.isVideoTexture !== true );
+			const useTexStorage = ( isWebGL2 && texture.isVideoTexture !== true && texture.isExternalTexture !== true );
 			const allocateMemory = ( sourceProperties.__version === undefined ) || ( forceUpload === true );
 			const levels = getMipLevels( texture, image, supportsMips );
 
-			if ( texture.isDepthTexture ) {
+			if ( texture.isExternalTexture ) {
+
+				textureProperties.__webglTexture = texture.image.data;
+
+			} else if ( texture.isDepthTexture ) {
 
 				// populate depth texture with dummy data
 
@@ -24989,6 +25003,21 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 
 	}
 
+	function updateExternalOpaqueTexture( texture ) {
+
+		const frame = info.render.frame;
+
+		// Check the last frame we updated the VideoTexture
+
+		if ( _externalOpaqueTextures.get( texture ) !== frame ) {
+
+			_externalOpaqueTextures.set( texture, frame );
+			texture.update();
+
+		}
+
+	}
+
 	function verifyColorSpace( texture, image ) {
 
 		const encoding = texture.encoding;
@@ -25736,6 +25765,64 @@ class DepthTexture extends Texture {
 
 }
 
+class ExternalTexture extends Texture {
+
+	constructor( glTexture, width = 1, height = 1, format, type, mapping, wrapS, wrapT, magFilter = NearestFilter, minFilter = NearestFilter, anisotropy, encoding ) {
+
+		super( null, mapping, wrapS, wrapT, magFilter, minFilter, format, type, anisotropy, encoding );
+
+		this.isExternalTexture = true;
+
+		this.image = { data: glTexture, width, height };
+
+		this.generateMipmaps = false;
+		this.flipY = false;
+		this.unpackAlignment = 1;
+
+	}
+
+	// TODO: Override toJSON and throw an error?
+	// The closest we could get to serialisation would be dumping
+	// the current texture content to pixels and saving it as a static image.
+
+}
+
+class ExternalOpaqueTexture extends ExternalTexture {
+
+	constructor( glTextureGetter, width = 1, height = 1, format, type, mapping, wrapS, wrapT, magFilter = NearestFilter, minFilter = NearestFilter, anisotropy, encoding ) {
+
+		super( null, mapping, wrapS, wrapT, magFilter, minFilter, format, type, anisotropy, encoding );
+
+		this.isExternalOpaqueTexture = true;
+
+		this.image = { data: null, width, height };
+		this._glTextureGetter = glTextureGetter;
+
+		this.generateMipmaps = false;
+		this.flipY = false;
+		this.unpackAlignment = 1;
+
+	}
+
+	update() {
+
+		const newData = this._glTextureGetter();
+		if ( newData ) {
+
+			Object.assign( this.image, newData );
+
+		}
+
+		this.needsUpdate = true;
+
+	}
+
+	// TODO: Override toJSON and throw an error?
+	// The closest we could get to serialisation would be dumping
+	// the current texture content to pixels and saving it as a static image.
+
+}
+
 class WebXRManager extends EventDispatcher {
 
 	constructor( renderer, gl ) {
@@ -26001,6 +26088,7 @@ class WebXRManager extends EventDispatcher {
 					};
 
 					glBaseLayer = new XRWebGLLayer( session, gl, layerInit );
+					glBinding = new XRWebGLBinding( session, gl );
 
 					session.updateRenderState( { baseLayer: glBaseLayer } );
 
@@ -26073,6 +26161,36 @@ class WebXRManager extends EventDispatcher {
 				scope.dispatchEvent( { type: 'sessionstart' } );
 
 			}
+
+		};
+
+		this.getCameraTexture = () => {
+
+			const glTextureGetter = () => {
+
+				// const session = this.getSession();
+				if ( ! session ) return console.warn( 'No XR Session.' );
+
+				// const xrFrame = this.getFrame();
+				if ( ! xrFrame ) return console.warn( 'No XR Frame.' );
+
+				// const referenceSpace = this.getReferenceSpace();
+				if ( ! referenceSpace ) return console.warn( 'No XR Reference Space.' );
+
+				if ( ! glBinding ) return console.warn( 'No XR GL Binding.' );
+
+				const viewerPose = xrFrame.getViewerPose( referenceSpace );
+				const view = viewerPose.views.find( v => !! v.camera );
+
+				if ( ! view ) return console.warn( 'No XR View with camera.' );
+
+				const glOpaqueTexture = glBinding.getCameraImage( view.camera );
+
+				return { data: glOpaqueTexture, width: view.camera.width, height: view.camera.height };
+
+			};
+
+			return new ExternalOpaqueTexture( glTextureGetter );
 
 		};
 
@@ -50831,3 +50949,4 @@ if ( typeof window !== 'undefined' ) {
 }
 
 export { ACESFilmicToneMapping, AddEquation, AddOperation, AdditiveAnimationBlendMode, AdditiveBlending, AlphaFormat, AlwaysDepth, AlwaysStencilFunc, AmbientLight, AmbientLightProbe, AnimationAction, AnimationClip, AnimationLoader, AnimationMixer, AnimationObjectGroup, AnimationUtils, ArcCurve, ArrayCamera, ArrowHelper, Audio, AudioAnalyser, AudioContext, AudioListener, AudioLoader, AxesHelper, BackSide, BasicDepthPacking, BasicShadowMap, Bone, BooleanKeyframeTrack, Box2, Box3, Box3Helper, BoxBufferGeometry, BoxGeometry, BoxHelper, BufferAttribute, BufferGeometry, BufferGeometryLoader, ByteType, Cache, Camera, CameraHelper, CanvasTexture, CapsuleBufferGeometry, CapsuleGeometry, CatmullRomCurve3, CineonToneMapping, CircleBufferGeometry, CircleGeometry, ClampToEdgeWrapping, Clock, Color, ColorKeyframeTrack, ColorManagement, CompressedArrayTexture, CompressedTexture, CompressedTextureLoader, ConeBufferGeometry, ConeGeometry, CubeCamera, CubeReflectionMapping, CubeRefractionMapping, CubeTexture, CubeTextureLoader, CubeUVReflectionMapping, CubicBezierCurve, CubicBezierCurve3, CubicInterpolant, CullFaceBack, CullFaceFront, CullFaceFrontBack, CullFaceNone, Curve, CurvePath, CustomBlending, CustomToneMapping, CylinderBufferGeometry, CylinderGeometry, Cylindrical, Data3DTexture, DataArrayTexture, DataTexture, DataTextureLoader, DataUtils, DecrementStencilOp, DecrementWrapStencilOp, DefaultLoadingManager, DepthFormat, DepthStencilFormat, DepthTexture, DirectionalLight, DirectionalLightHelper, DiscreteInterpolant, DisplayP3ColorSpace, DodecahedronBufferGeometry, DodecahedronGeometry, DoubleSide, DstAlphaFactor, DstColorFactor, DynamicCopyUsage, DynamicDrawUsage, DynamicReadUsage, EdgesGeometry, EllipseCurve, EqualDepth, EqualStencilFunc, EquirectangularReflectionMapping, EquirectangularRefractionMapping, Euler, EventDispatcher, ExtrudeBufferGeometry, ExtrudeGeometry, FileLoader, Float16BufferAttribute, Float32BufferAttribute, Float64BufferAttribute, FloatType, Fog, FogExp2, FramebufferTexture, FrontSide, Frustum, GLBufferAttribute, GLSL1, GLSL3, GreaterDepth, GreaterEqualDepth, GreaterEqualStencilFunc, GreaterStencilFunc, GridHelper, Group, HalfFloatType, HemisphereLight, HemisphereLightHelper, HemisphereLightProbe, IcosahedronBufferGeometry, IcosahedronGeometry, ImageBitmapLoader, ImageLoader, ImageUtils, IncrementStencilOp, IncrementWrapStencilOp, InstancedBufferAttribute, InstancedBufferGeometry, InstancedInterleavedBuffer, InstancedMesh, Int16BufferAttribute, Int32BufferAttribute, Int8BufferAttribute, IntType, InterleavedBuffer, InterleavedBufferAttribute, Interpolant, InterpolateDiscrete, InterpolateLinear, InterpolateSmooth, InvertStencilOp, KeepStencilOp, KeyframeTrack, LOD, LatheBufferGeometry, LatheGeometry, Layers, LessDepth, LessEqualDepth, LessEqualStencilFunc, LessStencilFunc, Light, LightProbe, Line, Line3, LineBasicMaterial, LineCurve, LineCurve3, LineDashedMaterial, LineLoop, LineSegments, LinearEncoding, LinearFilter, LinearInterpolant, LinearMipMapLinearFilter, LinearMipMapNearestFilter, LinearMipmapLinearFilter, LinearMipmapNearestFilter, LinearSRGBColorSpace, LinearToneMapping, Loader, LoaderUtils, LoadingManager, LoopOnce, LoopPingPong, LoopRepeat, LuminanceAlphaFormat, LuminanceFormat, MOUSE, Material, MaterialLoader, MathUtils, Matrix3, Matrix4, MaxEquation, Mesh, MeshBasicMaterial, MeshDepthMaterial, MeshDistanceMaterial, MeshLambertMaterial, MeshMatcapMaterial, MeshNormalMaterial, MeshPhongMaterial, MeshPhysicalMaterial, MeshStandardMaterial, MeshToonMaterial, MinEquation, MirroredRepeatWrapping, MixOperation, MultiplyBlending, MultiplyOperation, NearestFilter, NearestMipMapLinearFilter, NearestMipMapNearestFilter, NearestMipmapLinearFilter, NearestMipmapNearestFilter, NeverDepth, NeverStencilFunc, NoBlending, NoColorSpace, NoToneMapping, NormalAnimationBlendMode, NormalBlending, NotEqualDepth, NotEqualStencilFunc, NumberKeyframeTrack, Object3D, ObjectLoader, ObjectSpaceNormalMap, OctahedronBufferGeometry, OctahedronGeometry, OneFactor, OneMinusDstAlphaFactor, OneMinusDstColorFactor, OneMinusSrcAlphaFactor, OneMinusSrcColorFactor, OrthographicCamera, PCFShadowMap, PCFSoftShadowMap, PMREMGenerator, Path, PerspectiveCamera, Plane, PlaneBufferGeometry, PlaneGeometry, PlaneHelper, PointLight, PointLightHelper, Points, PointsMaterial, PolarGridHelper, PolyhedronBufferGeometry, PolyhedronGeometry, PositionalAudio, PropertyBinding, PropertyMixer, QuadraticBezierCurve, QuadraticBezierCurve3, Quaternion, QuaternionKeyframeTrack, QuaternionLinearInterpolant, RED_GREEN_RGTC2_Format, RED_RGTC1_Format, REVISION, RGBADepthPacking, RGBAFormat, RGBAIntegerFormat, RGBA_ASTC_10x10_Format, RGBA_ASTC_10x5_Format, RGBA_ASTC_10x6_Format, RGBA_ASTC_10x8_Format, RGBA_ASTC_12x10_Format, RGBA_ASTC_12x12_Format, RGBA_ASTC_4x4_Format, RGBA_ASTC_5x4_Format, RGBA_ASTC_5x5_Format, RGBA_ASTC_6x5_Format, RGBA_ASTC_6x6_Format, RGBA_ASTC_8x5_Format, RGBA_ASTC_8x6_Format, RGBA_ASTC_8x8_Format, RGBA_BPTC_Format, RGBA_ETC2_EAC_Format, RGBA_PVRTC_2BPPV1_Format, RGBA_PVRTC_4BPPV1_Format, RGBA_S3TC_DXT1_Format, RGBA_S3TC_DXT3_Format, RGBA_S3TC_DXT5_Format, RGB_ETC1_Format, RGB_ETC2_Format, RGB_PVRTC_2BPPV1_Format, RGB_PVRTC_4BPPV1_Format, RGB_S3TC_DXT1_Format, RGFormat, RGIntegerFormat, RawShaderMaterial, Ray, Raycaster, RectAreaLight, RedFormat, RedIntegerFormat, ReinhardToneMapping, RepeatWrapping, ReplaceStencilOp, ReverseSubtractEquation, RingBufferGeometry, RingGeometry, SIGNED_RED_GREEN_RGTC2_Format, SIGNED_RED_RGTC1_Format, SRGBColorSpace, Scene, ShaderChunk, ShaderLib, ShaderMaterial, ShadowMaterial, Shape, ShapeBufferGeometry, ShapeGeometry, ShapePath, ShapeUtils, ShortType, Skeleton, SkeletonHelper, SkinnedMesh, Source, Sphere, SphereBufferGeometry, SphereGeometry, Spherical, SphericalHarmonics3, SplineCurve, SpotLight, SpotLightHelper, Sprite, SpriteMaterial, SrcAlphaFactor, SrcAlphaSaturateFactor, SrcColorFactor, StaticCopyUsage, StaticDrawUsage, StaticReadUsage, StereoCamera, StreamCopyUsage, StreamDrawUsage, StreamReadUsage, StringKeyframeTrack, SubtractEquation, SubtractiveBlending, TOUCH, TangentSpaceNormalMap, TetrahedronBufferGeometry, TetrahedronGeometry, Texture, TextureLoader, TorusBufferGeometry, TorusGeometry, TorusKnotBufferGeometry, TorusKnotGeometry, Triangle, TriangleFanDrawMode, TriangleStripDrawMode, TrianglesDrawMode, TubeBufferGeometry, TubeGeometry, TwoPassDoubleSide, UVMapping, Uint16BufferAttribute, Uint32BufferAttribute, Uint8BufferAttribute, Uint8ClampedBufferAttribute, Uniform, UniformsGroup, UniformsLib, UniformsUtils, UnsignedByteType, UnsignedInt248Type, UnsignedIntType, UnsignedShort4444Type, UnsignedShort5551Type, UnsignedShortType, VSMShadowMap, Vector2, Vector3, Vector4, VectorKeyframeTrack, VideoTexture, WebGL1Renderer, WebGL3DRenderTarget, WebGLArrayRenderTarget, WebGLCubeRenderTarget, WebGLMultipleRenderTargets, WebGLRenderTarget, WebGLRenderer, WebGLUtils, WireframeGeometry, WrapAroundEnding, ZeroCurvatureEnding, ZeroFactor, ZeroSlopeEnding, ZeroStencilOp, _SRGBAFormat, sRGBEncoding };
+//# sourceMappingURL=data:application/json;charset=utf-8;base64,eyJ2ZXJzaW9uIjozLCJmaWxlIjoidGhyZWUubW9kdWxlLmpzIiwic291cmNlcyI6W10sInNvdXJjZXNDb250ZW50IjpbXSwibmFtZXMiOltdLCJtYXBwaW5ncyI6IiJ9

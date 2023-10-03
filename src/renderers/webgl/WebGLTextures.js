@@ -14,6 +14,8 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 	const supportsInvalidateFramebuffer = typeof navigator === 'undefined' ? false : /OculusBrowser/g.test( navigator.userAgent );
 
 	const _videoTextures = new WeakMap();
+	const _externalOpaqueTextures = new WeakMap();
+
 	let _canvas;
 
 	const _sources = new WeakMap(); // maps WebglTexture objects to instances of Source
@@ -297,8 +299,12 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 
 	function deleteTexture( texture ) {
 
-		const textureProperties = properties.get( texture );
-		_gl.deleteTexture( textureProperties.__webglTexture );
+		if ( ! texture.isExternalTexture ) {
+
+			const textureProperties = properties.get( texture );
+			_gl.deleteTexture( textureProperties.__webglTexture );
+
+		}
 
 		const source = texture.source;
 		const webglTextures = _sources.get( source );
@@ -439,6 +445,7 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 		const textureProperties = properties.get( texture );
 
 		if ( texture.isVideoTexture ) updateVideoTexture( texture );
+		if ( texture.isExternalOpaqueTexture ) updateExternalOpaqueTexture( texture );
 
 		if ( texture.isRenderTargetTexture === false && texture.version > 0 && textureProperties.__version !== texture.version ) {
 
@@ -624,10 +631,13 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 
 			if ( webglTextures[ textureCacheKey ] === undefined ) {
 
-				// create new entry
+				// ExternalTexture provide their own texture
 
+				const glTexture = texture.isExternalTexture ? texture.image.data : _gl.createTexture();
+
+				// create new entry
 				webglTextures[ textureCacheKey ] = {
-					texture: _gl.createTexture(),
+					texture: glTexture,
 					usedTimes: 0
 				};
 
@@ -636,7 +646,7 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 				// when a new instance of WebGLTexture was created, a texture upload is required
 				// even if the image contents are identical
 
-				forceUpload = true;
+				forceUpload = ! texture.isExternalTexture;
 
 			}
 
@@ -708,11 +718,15 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 			let mipmap;
 			const mipmaps = texture.mipmaps;
 
-			const useTexStorage = ( isWebGL2 && texture.isVideoTexture !== true );
+			const useTexStorage = ( isWebGL2 && texture.isVideoTexture !== true && texture.isExternalTexture !== true );
 			const allocateMemory = ( sourceProperties.__version === undefined ) || ( forceUpload === true );
 			const levels = getMipLevels( texture, image, supportsMips );
 
-			if ( texture.isDepthTexture ) {
+			if ( texture.isExternalTexture ) {
+
+				textureProperties.__webglTexture = texture.image.data;
+
+			} else if ( texture.isDepthTexture ) {
 
 				// populate depth texture with dummy data
 
@@ -1912,6 +1926,21 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 		if ( _videoTextures.get( texture ) !== frame ) {
 
 			_videoTextures.set( texture, frame );
+			texture.update();
+
+		}
+
+	}
+
+	function updateExternalOpaqueTexture( texture ) {
+
+		const frame = info.render.frame;
+
+		// Check the last frame we updated the VideoTexture
+
+		if ( _externalOpaqueTextures.get( texture ) !== frame ) {
+
+			_externalOpaqueTextures.set( texture, frame );
 			texture.update();
 
 		}
