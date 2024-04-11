@@ -269,8 +269,9 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 			webglTexture.usedTimes --;
 
 			// the WebGLTexture object is not used anymore, remove it
+			// Do not dispose raw textures, they are managed externally
 
-			if ( webglTexture.usedTimes === 0 ) {
+			if ( webglTexture.usedTimes === 0 && ! texture.isRawTexture ) {
 
 				deleteTexture( texture );
 
@@ -585,6 +586,8 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 
 	function initTexture( textureProperties, texture ) {
 
+		console.debug('initTexture(properties, texture):', textureProperties, texture);
+
 		let forceUpload = false;
 
 		if ( textureProperties.__webglInit === undefined ) {
@@ -617,19 +620,22 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 
 			if ( webglTextures[ textureCacheKey ] === undefined ) {
 
+				const glTexture = texture.isRawTexture ? texture.sourceTexture : _gl.createTexture();
+
 				// create new entry
 
 				webglTextures[ textureCacheKey ] = {
-					texture: _gl.createTexture(),
+					texture: glTexture,
 					usedTimes: 0
 				};
 
 				info.memory.textures ++;
 
 				// when a new instance of WebGLTexture was created, a texture upload is required
-				// even if the image contents are identical
+				// even if the image contents are identical.
+				// Raw textures are the exception, they are externally managed and uploaded
 
-				forceUpload = true;
+				forceUpload = !texture.isRawTexture;
 
 			}
 
@@ -678,6 +684,8 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 		const sourceProperties = properties.get( source );
 
 		if ( source.version !== sourceProperties.__version || forceUpload === true ) {
+
+			console.debug('uploadTexture(properties, texture, slot): ', properties, texture, slot);
 
 			state.activeTexture( _gl.TEXTURE0 + slot );
 

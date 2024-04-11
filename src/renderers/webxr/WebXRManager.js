@@ -9,6 +9,7 @@ import { WebGLAnimation } from '../webgl/WebGLAnimation.js';
 import { WebGLRenderTarget } from '../WebGLRenderTarget.js';
 import { WebXRController } from './WebXRController.js';
 import { DepthTexture } from '../../textures/DepthTexture.js';
+import { Texture } from '../../textures/Texture.js';
 import { DepthFormat, DepthStencilFormat, RGBAFormat, UnsignedByteType, UnsignedIntType, UnsignedInt248Type } from '../../constants.js';
 import { WebXRDepthSensing } from './WebXRDepthSensing.js';
 
@@ -38,6 +39,7 @@ class WebXRManager extends EventDispatcher {
 
 		const depthSensing = new WebXRDepthSensing();
 		const attributes = gl.getContextAttributes();
+		const cameraAccessTextures = new WeakMap();
 
 		let initialRenderTarget = null;
 		let newRenderTarget = null;
@@ -666,6 +668,20 @@ class WebXRManager extends EventDispatcher {
 
 		};
 
+		this.getCameraTexture = function ( xrView ) {
+
+			// Get or park the RawTexture to be populated inside onAnimationFrame
+
+			let rawTexture = cameraAccessTextures.get( xrView );
+			if ( rawTexture ) return rawTexture;
+
+			rawTexture = new Texture();
+			cameraAccessTextures.set( xrView, rawTexture );
+
+			return rawTexture;
+
+		};
+
 		// Animation Loop
 
 		let onAnimationFrameCallback = null;
@@ -769,6 +785,26 @@ class WebXRManager extends EventDispatcher {
 					if ( depthData && depthData.isValid && depthData.texture ) {
 
 						depthSensing.init( renderer, depthData, session.renderState );
+
+					}
+
+				}
+
+				if ( enabledFeatures && enabledFeatures.includes( 'camera-access' ) ) {
+
+					const viewerPose = frame.getViewerPose( referenceSpace );
+
+					for ( const view of viewerPose.views ) {
+
+						const texture = cameraAccessTextures.get( view );
+
+						if ( view.camera && texture ) {
+
+							const glTexture = glBinding.getCameraImage( view.camera );
+							const texProps = renderer.properties.get( texture );
+							texProps.__webglTexture = glTexture;
+
+						}
 
 					}
 

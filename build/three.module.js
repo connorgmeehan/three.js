@@ -23932,8 +23932,9 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 			webglTexture.usedTimes --;
 
 			// the WebGLTexture object is not used anymore, remove it
+			// Do not dispose raw textures, they are managed externally
 
-			if ( webglTexture.usedTimes === 0 ) {
+			if ( webglTexture.usedTimes === 0 && ! texture.isRawTexture ) {
 
 				deleteTexture( texture );
 
@@ -24248,6 +24249,8 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 
 	function initTexture( textureProperties, texture ) {
 
+		console.debug('initTexture(properties, texture):', textureProperties, texture);
+
 		let forceUpload = false;
 
 		if ( textureProperties.__webglInit === undefined ) {
@@ -24280,19 +24283,22 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 
 			if ( webglTextures[ textureCacheKey ] === undefined ) {
 
+				const glTexture = texture.isRawTexture ? texture.sourceTexture : _gl.createTexture();
+
 				// create new entry
 
 				webglTextures[ textureCacheKey ] = {
-					texture: _gl.createTexture(),
+					texture: glTexture,
 					usedTimes: 0
 				};
 
 				info.memory.textures ++;
 
 				// when a new instance of WebGLTexture was created, a texture upload is required
-				// even if the image contents are identical
+				// even if the image contents are identical.
+				// Raw textures are the exception, they are externally managed and uploaded
 
-				forceUpload = true;
+				forceUpload = !texture.isRawTexture;
 
 			}
 
@@ -24341,6 +24347,8 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 		const sourceProperties = properties.get( source );
 
 		if ( source.version !== sourceProperties.__version || forceUpload === true ) {
+
+			console.debug('uploadTexture(properties, texture, slot): ', properties, texture, slot);
 
 			state.activeTexture( _gl.TEXTURE0 + slot );
 
@@ -26410,6 +26418,7 @@ class WebXRManager extends EventDispatcher {
 
 		const depthSensing = new WebXRDepthSensing();
 		const attributes = gl.getContextAttributes();
+		const cameraAccessTextures = new WeakMap();
 
 		let initialRenderTarget = null;
 		let newRenderTarget = null;
@@ -27038,6 +27047,20 @@ class WebXRManager extends EventDispatcher {
 
 		};
 
+		this.getCameraTexture = function ( xrView ) {
+
+			// Get or park the RawTexture to be populated inside onAnimationFrame
+
+			let rawTexture = cameraAccessTextures.get( xrView );
+			if ( rawTexture ) return rawTexture;
+
+			rawTexture = new Texture();
+			cameraAccessTextures.set( xrView, rawTexture );
+
+			return rawTexture;
+
+		};
+
 		// Animation Loop
 
 		let onAnimationFrameCallback = null;
@@ -27141,6 +27164,26 @@ class WebXRManager extends EventDispatcher {
 					if ( depthData && depthData.isValid && depthData.texture ) {
 
 						depthSensing.init( renderer, depthData, session.renderState );
+
+					}
+
+				}
+
+				if ( enabledFeatures && enabledFeatures.includes( 'camera-access' ) ) {
+
+					const viewerPose = frame.getViewerPose( referenceSpace );
+
+					for ( const view of viewerPose.views ) {
+
+						const texture = cameraAccessTextures.get( view );
+
+						if ( view.camera && texture ) {
+
+							const glTexture = glBinding.getCameraImage( view.camera );
+							const texProps = renderer.properties.get( texture );
+							texProps.__webglTexture = glTexture;
+
+						}
 
 					}
 

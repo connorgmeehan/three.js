@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js ar - plane detection</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+		<link type="text/css" rel="stylesheet" href="main.css">
+	</head>
+	<body>
+
+		<div id="info">
+			<a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> ar - plane detection<br/>(Chrome Android 81+)
+		</div>
+
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "../build/three.module.js",
+					"three/addons/": "./jsm/"
+				}
+			}
+		</script>
+
+		<script type="module">
+
+			import * as THREE from 'three';
+			import { ARButton } from 'three/addons/webxr/ARButton.js';
+
+			//
+
+			const renderer = new THREE.WebGLRenderer( { antialias: true, alpha: true } );
+			renderer.setPixelRatio( window.devicePixelRatio );
+			renderer.setSize( window.innerWidth, window.innerHeight );
+			renderer.setAnimationLoop( render );
+			renderer.xr.enabled = true;
+			document.body.appendChild( renderer.domElement );
+
+			document.body.appendChild( ARButton.createButton( renderer, {
+				requiredFeatures: [ 'camera-access' ]
+			} ) );
+
+			window.addEventListener( 'resize', onWindowResize );
+
+			//
+
+			const scene = new THREE.Scene();
+
+			const camera = new THREE.PerspectiveCamera( 70, window.innerWidth / window.innerHeight, 0.01, 20 );
+
+			const light = new THREE.HemisphereLight( 0xffffff, 0xbbbbff, 3 );
+			light.position.set( 0.5, 1, 0.25 );
+			scene.add( light );
+
+			//
+
+			let cameraTexture;
+
+			function onSelect(ev) {
+
+				if (!cameraTexture) return console.warn('No camera texture to spawn cube with.')
+
+				const mesh = new THREE.Mesh(
+					new THREE.BoxGeometry(),
+					new THREE.MeshBasicMaterial({
+						map: cameraTexture,
+					})
+				);
+
+				mesh.position.set( 0, 0, - 0.3 ).applyMatrix4( controller.matrixWorld );
+				mesh.quaternion.setFromRotationMatrix( controller.matrixWorld );
+
+				scene.add( mesh );
+
+			}
+
+			const controller = renderer.xr.getController( 0 );
+			controller.addEventListener( 'select', onSelect );
+			scene.add( controller );
+
+			function onWindowResize() {
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+			}
+
+			function updateCameraTexture() {
+
+				const frame = renderer.xr.getFrame();
+				const referenceSpace = renderer.xr.getReferenceSpace();
+
+				if ( !frame || !referenceSpace ) return console.warn( 'No frame or reference space.', frame, referenceSpace );
+
+				const viewerPose = frame.getViewerPose( referenceSpace );
+
+				if ( ! viewerPose ) return;
+
+				const view = viewerPose.views.find( view => view.camera );
+				cameraTexture = renderer.xr.getCameraTexture( view );
+
+			}
+
+			function render() {
+
+				if ( !cameraTexture ) {
+
+					updateCameraTexture();
+
+				}
+
+
+				renderer.render( scene, camera );
+
+			}
+
+		</script>
+	</body>
+</html>
