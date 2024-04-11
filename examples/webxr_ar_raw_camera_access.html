@@ -26,6 +26,9 @@
 			import * as THREE from 'three';
 			import { ARButton } from 'three/addons/webxr/ARButton.js';
 
+			import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+			import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+
 			//
 
 			const renderer = new THREE.WebGLRenderer( { antialias: true, alpha: true } );
@@ -51,22 +54,41 @@
 			light.position.set( 0.5, 1, 0.25 );
 			scene.add( light );
 
+			const dracoLoader = new DRACOLoader();
+			dracoLoader.setDecoderPath( 'jsm/libs/draco/gltf/' );
+
+			const loader = new GLTFLoader();
+			loader.setDRACOLoader( dracoLoader );
+
 			//
 
 			let cameraTexture;
 
-			function onSelect(ev) {
+			async function onSelect(ev) {
 
 				if (!cameraTexture) return console.warn('No camera texture to spawn cube with.')
 
-				const mesh = new THREE.Mesh(
-					new THREE.BoxGeometry(),
-					new THREE.MeshBasicMaterial({
-						map: cameraTexture,
-					})
-				);
+				const spawnCube = Math.random() > 0.5;
 
-				mesh.position.set( 0, 0, - 0.3 ).applyMatrix4( controller.matrixWorld );
+				let mesh;
+				if ( spawnCube ) {
+
+					mesh = new THREE.Mesh(
+						new THREE.BoxGeometry(),
+						new THREE.MeshBasicMaterial({
+							map: cameraTexture,
+						})
+					);
+
+				} else {
+
+					const gltf = await loader.loadAsync( 'models/gltf/LittlestTokyo.glb');
+					gltf.scene.scale.multiplyScalar(0.001)
+					mesh = gltf.scene;
+
+				}
+
+				mesh.position.set( 0, 0, - 2.3 ).applyMatrix4( controller.matrixWorld );
 				mesh.quaternion.setFromRotationMatrix( controller.matrixWorld );
 
 				scene.add( mesh );
@@ -87,6 +109,8 @@
 			}
 
 			function updateCameraTexture() {
+
+				if ( ! renderer.xr.getSession() ) return;
 
 				const frame = renderer.xr.getFrame();
 				const referenceSpace = renderer.xr.getReferenceSpace();
